@@ -2,151 +2,132 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import requests
+import os
+import time
 from datetime import datetime
 
+# Configuración de la página
 st.set_page_config(
-    page_title="Dashboard Interactivo de Películas",
+    page_title="CineData Pro | Visualizador",
     page_icon="🎬",
     layout="wide"
 )
 
-# CSS personalizado
+# Estilo CSS
 st.markdown("""
-    .metric-box {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
+    <style>
+    .main { background-color: #0e1117; }
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #464646; }
+    </style>
 """, unsafe_allow_html=True)
 
-st.title("🎛️ Dashboard Interactivo - Películas OMDb")
+# --- LÓGICA DE DATOS ---
+PATH_CSV = 'data/peliculas.csv'
 
-# Configuración API
-API_KEY = "70dd038a"
-OMDB_BASE_URL = "http://www.omdbapi.com/"
-MOVIE_IDS = ["tt3896198"]  # Puedes agregar más IDs
+def get_last_modified_time():
+    return os.path.getmtime(PATH_CSV) if os.path.exists(PATH_CSV) else 0
 
-def get_movie_data(imdb_id):
-    params = {"apikey": API_KEY, "i": imdb_id}
-    response = requests.get(OMDB_BASE_URL, params=params)
-    if response.status_code == 200 and response.json().get("Response") == "True":
-        movie = response.json()
-        return {
-            "Título": movie.get("Title"),
-            "Año": int(movie.get("Year", 0)),
-            "Rating IMDB": float(movie.get("imdbRating", 0)),
-            "Metascore": int(movie.get("Metascore", 0)) if movie.get("Metascore","N/A")!="N/A" else None,
-            "Votos IMDB": int(movie.get("imdbVotes","0").replace(",","")),
-            "BoxOffice": movie.get("BoxOffice","N/A"),
-            "Género": movie.get("Genre"),
-            "Director": movie.get("Director"),
-            "Actores": movie.get("Actors"),
-            "Idioma": movie.get("Language"),
-            "País": movie.get("Country"),
-            "Poster": movie.get("Poster")
-        }
-    return None
+@st.cache_data(show_spinner="Cargando catálogo actualizado...")
+def load_data():
+    if not os.path.exists(PATH_CSV):
+        return pd.DataFrame()
+    
+    df = pd.read_csv(PATH_CSV)
+    # Limpieza de datos
+    df['calificacion_imdb'] = pd.to_numeric(df['calificacion_imdb'], errors='coerce').fillna(0)
+    df['anio_limpio'] = pd.to_numeric(df['anio'].astype(str).str.extract('(\d{4})')[0], errors='coerce')
+    df['votos_imdb'] = df['votos_imdb'].astype(str).str.replace(',', '').apply(pd.to_numeric, errors='coerce').fillna(0)
+    return df
 
-# Obtener datos
-movies_data = [get_movie_data(mid) for mid in MOVIE_IDS]
-df = pd.DataFrame([m for m in movies_data if m is not None])
+# --- FUNCIÓN CRÍTICA: VALIDADOR DE IMAGEN ---
+def obtener_url_valida(url):
+    """Evita el error de 'float' convirtiendo NaNs o N/A en un placeholder."""
+    if pd.isna(url) or not isinstance(url, str) or url == "N/A" or url.strip() == "":
+        return "https://via.placeholder.com/300x450?text=Sin+Imagen"
+    return url
+
+# Control de auto-refresco
+current_mtime = get_last_modified_time()
+if "mtime" not in st.session_state:
+    st.session_state.mtime = current_mtime
+
+if current_mtime > st.session_state.mtime:
+    st.session_state.mtime = current_mtime
+    st.cache_data.clear()
+    st.rerun()
+
+df = load_data()
+
+st.title("🎬 CineData Pro: Explorador Visual")
 
 if not df.empty:
-    # Sidebar filtros
-    st.sidebar.markdown("### 🔧 Controles")
+    # Sidebar
+    st.sidebar.header("🎯 Filtros de Búsqueda")
+    termino_busqueda = st.sidebar.text_input("Buscar película por título:", "")
+    rating_min = st.sidebar.slider("Rating IMDB mínimo ⭐", 0.0, 10.0, 6.5)
     
-    # Filtro por año
-    año_min = int(df['Año'].min())
-    año_max = int(df['Año'].max())
-    if año_min == año_max:  # Ajuste si solo hay un año
-        año_max = año_min + 1
+    # Manejo de géneros (evitar errores si la columna está vacía)
+    df['genero'] = df['genero'].fillna("Sin Género")
+    generos = sorted(list(set([g.strip() for sublist in df['genero'].str.split(',') for g in sublist])))
+    generos_sel = st.sidebar.multiselect("Filtrar por Género:", generos)
 
-    año_rango = st.sidebar.slider("📅 Rango de Año:", año_min, año_max, (año_min, año_max))
-    df_filtrado = df[(df['Año'] >= año_rango[0]) & (df['Año'] <= año_rango[1])]
+    # Filtrado
+    df_filtrado = df[
+        (df['titulo'].str.contains(termino_busqueda, case=False)) &
+        (df['calificacion_imdb'] >= rating_min)
+    ]
     
-    # Filtro por rating
-    rating_min = float(df['Rating IMDB'].min())
-    rating_max = float(df['Rating IMDB'].max())
-    if rating_min == rating_max:  # Ajuste si todos tienen el mismo rating
-        rating_max = rating_min + 1
+    if generos_sel:
+        df_filtrado = df_filtrado[df_filtrado['genero'].apply(lambda x: any(g in str(x) for g in generos_sel))]
 
-    rating_rango = st.sidebar.slider("⭐ Rango de Rating IMDB:", rating_min, rating_max, (rating_min, rating_max))
-    df_filtrado = df_filtrado[(df_filtrado['Rating IMDB'] >= rating_rango[0]) & (df_filtrado['Rating IMDB'] <= rating_rango[1])]
-    
     # KPIs
-    st.markdown("### 📊 Indicadores Clave")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🎬 Total Películas", len(df_filtrado))
-    with col2:
-        st.metric("⭐ Rating Promedio", f"{df_filtrado['Rating IMDB'].mean():.1f}")
-    with col3:
-        metascore_avg = df_filtrado['Metascore'].dropna().mean() if not df_filtrado['Metascore'].dropna().empty else 0
-        st.metric("📈 Metascore Promedio", f"{metascore_avg:.1f}")
-    with col4:
-        votos_totales = df_filtrado['Votos IMDB'].sum()
-        st.metric("🗳️ Total Votos", f"{votos_totales:,}")
-    
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+    col_kpi1.metric("Total Películas", len(df))
+    col_kpi2.metric("Encontradas", len(df_filtrado))
+    col_kpi3.metric("Rating Promedio", f"{df_filtrado['calificacion_imdb'].mean():.1f}")
+    col_kpi4.metric("Sincronizado", datetime.fromtimestamp(current_mtime).strftime('%H:%M:%S'))
+
     st.markdown("---")
+
+    # --- GALERÍA DE CARÁTULAS ---
+    st.subheader("🖼️ Galería Visual (Top 24)")
+    cols = st.columns(6)
     
+    for i, (idx, row) in enumerate(df_filtrado.head(24).iterrows()):
+        with cols[i % 6]:
+            # Aplicamos la validación para evitar el error de float
+            img_url = obtener_url_valida(row.get('poster'))
+            
+            try:
+                st.image(img_url, use_container_width=True)
+            except:
+                st.image("https://via.placeholder.com/300x450?text=Error+Imagen", use_container_width=True)
+            
+            with st.expander(f"ℹ️ {row['titulo'][:15]}"):
+                st.write(f"**Año:** {row['anio']}")
+                st.write(f"⭐ {row['calificacion_imdb']}")
+                youtube_url = f"https://www.youtube.com/results?search_query={row['titulo'].replace(' ', '+')}+official+trailer"
+                st.link_button("🎥 Trailer", youtube_url)
+
+    st.markdown("---")
+
     # Gráficas
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("#### Comparativa de Rating IMDB")
-        fig = px.bar(
-            df_filtrado,
-            x='Título',
-            y='Rating IMDB',
-            color='Rating IMDB',
-            color_continuous_scale='Blues'
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.markdown("#### Votos IMDB")
-        fig = px.bar(
-            df_filtrado,
-            x='Título',
-            y='Votos IMDB',
-            color='Votos IMDB',
-            color_continuous_scale='Viridis'
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("---")
-    
-    # Evolución temporal (por año)
-    st.markdown("#### 📈 Evolución por Año")
-    df_anno = df_filtrado.groupby('Año')['Rating IMDB'].mean().reset_index()
-    fig = px.line(
-        df_anno,
-        x='Año',
-        y='Rating IMDB',
-        markers=True,
-        title='Rating Promedio por Año'
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("---")
-    
-    # Tabla interactiva
-    st.markdown("#### 📋 Datos Detallados")
-    columnas_mostrar = st.multiselect(
-        "Columnas a mostrar:",
-        df_filtrado.columns.tolist(),
-        default=['Título', 'Año', 'Rating IMDB', 'Metascore', 'Votos IMDB', 'BoxOffice']
-    )
-    st.dataframe(df_filtrado[columnas_mostrar], use_container_width=True, height=400)
-    
-    # Descarga CSV
-    csv = df_filtrado.to_csv(index=False)
-    st.download_button(
-        label="⬇️ Descargar datos como CSV",
-        data=csv,
-        file_name=f"peliculas_datos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv"
-    )
+    col_graph1, col_graph2 = st.columns(2)
+    with col_graph1:
+        st.markdown("#### 📈 Calificación vs Año")
+        fig_scatter = px.scatter(df_filtrado, x="anio_limpio", y="calificacion_imdb", 
+                                 color="calificacion_imdb", size="votos_imdb", hover_name="titulo")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    with col_graph2:
+        st.markdown("#### 📊 Top 10 Películas")
+        top_10 = df_filtrado.nlargest(10, 'calificacion_imdb')
+        fig_bar = px.bar(top_10, x='calificacion_imdb', y='titulo', orientation='h', color='calificacion_imdb')
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with st.expander("🔍 Ver base de datos completa"):
+        st.dataframe(df_filtrado, use_container_width=True)
 
 else:
-    st.warning("⚠️ No hay datos disponibles para los filtros seleccionados")
+    st.warning("⚠️ No se encuentran datos. Por favor, ejecuta el extractor primero.")

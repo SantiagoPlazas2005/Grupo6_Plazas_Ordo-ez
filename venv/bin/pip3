@@ -1,4 +1,4 @@
-#!/home/sergio/base_datos_peliculas/venv/bin/python3
+#!/home/santiagoplazas/base_datos_peliculas/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

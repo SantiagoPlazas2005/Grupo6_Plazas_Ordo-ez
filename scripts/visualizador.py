@@ -1,66 +1,119 @@
 #!/usr/bin/env python3
+import os
+import requests
+import json
 import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
+from datetime import datetime
+from dotenv import load_dotenv
 import logging
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/visualizador.log'),
+        logging.FileHandler('logs/etl_omdb.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Cargar datos
-df = pd.read_csv('data/peliculas.csv')
+class OMDbExtractor:
+    def __init__(self):
+        # Usamos tu API KEY que ya sabemos que funciona
+        self.api_key = os.getenv('API_KEY', '70dd038a')
+        self.base_url = os.getenv('OMDB_BASE_URL', 'http://www.omdbapi.com/')
+        
+        # DEFINICIÓN DE BÚSQUEDA: Aquí es donde "sacamos todas"
+        # Editando esta lista obtendrás diferentes colecciones
+        self.search_terms = ['Marvel', 'Star Wars', 'Batman', 'Avengers', 'Disney']
 
-# Convertir columnas numéricas
-df['calificacion_imdb'] = pd.to_numeric(df['calificacion_imdb'], errors='coerce')
-df['votos_imdb'] = df['votos_imdb'].str.replace(',', '').astype(float)
-df['anio'] = pd.to_numeric(df['anio'], errors='coerce')
-df['duracion_min'] = df['duracion'].str.extract('(\d+)').astype(float)
+    def buscar_ids_por_termino(self, termino):
+        """Busca en la API y retorna una lista de IDs de películas"""
+        ids = []
+        try:
+            # Traeremos las primeras 2 páginas de resultados (20 películas por término)
+            for page in range(1, 3): 
+                params = {
+                    's': termino,
+                    'apikey': self.api_key,
+                    'page': page,
+                    'type': 'movie'
+                }
+                response = requests.get(self.base_url, params=params, timeout=10)
+                data = response.json()
+                
+                if data.get('Response') == 'True':
+                    for item in data.get('Search', []):
+                        ids.append(item.get('imdbID'))
+            return ids
+        except Exception as e:
+            logger.error(f"Error buscando término {termino}: {e}")
+            return []
 
-# Crear figura con 2x2 subplots
-fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-fig.suptitle('Análisis de Películas', fontsize=16, fontweight='bold')
+    def extraer_detalle(self, movie_id):
+        """Obtiene la información completa de un ID específico"""
+        try:
+            params = {'i': movie_id, 'apikey': self.api_key}
+            response = requests.get(self.base_url, params=params, timeout=10)
+            return response.json()
+        except Exception:
+            return None
 
-# Gráfica 1: Calificación IMDb
-ax1 = axes[0, 0]
-ax1.bar(df['titulo'], df['calificacion_imdb'], color='#ff6b6b')
-ax1.set_title('Calificación IMDb')
-ax1.set_ylabel('IMDb Rating')
-ax1.tick_params(axis='x', rotation=45)
-ax1.grid(axis='y', alpha=0.3)
+    def procesar(self, data):
+        """Limpia y estructura los datos"""
+        if not data or data.get('Response') == 'False': return None
+        return {
+            'titulo': data.get('Title'),
+            'anio': data.get('Year'),
+            'rated': data.get('Rated'),
+            'genero': data.get('Genre'),
+            'director': data.get('Director'),
+            'actores': data.get('Actors'),
+            'calificacion_imdb': data.get('imdbRating'),
+            'votos_imdb': data.get('imdbVotes'),
+            'id_imdb': data.get('imdbID'),
+            'fecha_extraccion': datetime.now().isoformat()
+        }
 
-# Gráfica 2: Año de lanzamiento
-ax2 = axes[0, 1]
-ax2.bar(df['titulo'], df['anio'], color='#4ecdc4')
-ax2.set_title('Año de Lanzamiento')
-ax2.set_ylabel('Año')
-ax2.tick_params(axis='x', rotation=45)
-ax2.grid(axis='y', alpha=0.3)
+    def ejecutar(self):
+        todos_los_datos = []
+        ids_totales = []
 
-# Gráfica 3: Duración de la película
-ax3 = axes[1, 0]
-ax3.bar(df['titulo'], df['duracion_min'], color='#95e1d3')
-ax3.set_title('Duración (minutos)')
-ax3.set_ylabel('Minutos')
-ax3.tick_params(axis='x', rotation=45)
-ax3.grid(axis='y', alpha=0.3)
+        # 1. Recolectar todos los IDs basados en nuestros temas
+        for t in self.search_terms:
+            logger.info(f"🔍 Buscando películas de: {t}")
+            ids_totales.extend(self.buscar_ids_por_termino(t))
+        
+        # Eliminar duplicados
+        ids_unicos = list(set(ids_totales))
+        logger.info(f"🚀 Total de películas a procesar: {len(ids_unicos)}")
 
-# Gráfica 4: Cantidad de votos IMDb
-ax4 = axes[1, 1]
-ax4.bar(df['titulo'], df['votos_imdb'], color='#ffa07a')
-ax4.set_title('Cantidad de Votos IMDb')
-ax4.set_ylabel('Votos')
-ax4.tick_params(axis='x', rotation=45)
-ax4.grid(axis='y', alpha=0.3)
+        # 2. Extraer detalle de cada una
+        for i, mid in enumerate(ids_unicos):
+            logger.info(f"[{i+1}/{len(ids_unicos)}] Extrayendo detalle de {mid}")
+            raw_data = self.extraer_detalle(mid)
+            limpio = self.procesar(raw_data)
+            if limpio:
+                todos_los_datos.append(limpio)
+        
+        return todos_los_datos
 
-plt.tight_layout()
-plt.savefig('data/peliculas_analysis.png', dpi=300, bbox_inches='tight')
-logger.info("✅ Gráficas guardadas en data/peliculas_analysis.png")
-plt.show()
+if __name__ == "__main__":
+    extractor = OMDbExtractor()
+    resultados = extractor.ejecutar()
+
+    if resultados:
+        # Guardar JSON
+        with open('data/peliculas_raw.json', 'w', encoding='utf-8') as f:
+            json.dump(resultados, f, indent=2, ensure_ascii=False)
+        
+        # Guardar CSV
+        df = pd.DataFrame(resultados)
+        df.to_csv('data/peliculas.csv', index=False, encoding='utf-8')
+        
+        logger.info("📁 ETL Finalizado. Archivos actualizados en /data")
+        print(f"\nSe han extraído {len(df)} películas exitosamente.")
