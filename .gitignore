@@ -1,22 +1,43 @@
-# Entorno virtual
-venv/
-*.pyc
+# Python cache
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
 *.egg-info/
+dist/
+build/
+.Python
+
+# Notebooks - ignorar checkpoints pero mantener los notebooks
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+# IDE y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
 
 # Variables de entorno
 .env
 .env.local
-
-# Archivos del sistema
-.DS_Store
-Thumbs.db
-
-# Datos locales
-data/
-logs/
-
-# IDE
-.vscode/
-.idea/
-*.swp
+.env.*.local
