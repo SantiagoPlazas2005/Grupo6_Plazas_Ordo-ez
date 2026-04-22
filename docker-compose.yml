@@ -1,6 +1,8 @@
+version: '3.8'
+
 services:
-  # Base de Datos PostgreSQL
-  db:
+  # 1. Base de Datos
+  postgres_peliculas:
     image: postgres:15
     container_name: postgres_peliculas
     restart: always
@@ -18,35 +20,33 @@ services:
       timeout: 5s
       retries: 5
 
-  # Aplicación del Dashboard (Streamlit)
+  # 2. Aplicación Streamlit
   app:
     build: .
     container_name: dashboard_peliculas_app
-    # Forzamos a que este contenedor SOLO ejecute Streamlit
     command: ["streamlit", "run", "dashboard_interactive.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
       - "8501:8501"
     depends_on:
-      db:
+      postgres_peliculas:
         condition: service_healthy
     volumes:
       - .:/app
     environment:
-      - DB_HOST=db
+      - DB_HOST=postgres_peliculas
       - DB_NAME=base_datos_peliculas
       - DB_USER=santiago
       - DB_PASS=plazas2005
 
-  # Entorno de Desarrollo (Jupyter)
+  # 3. Entorno Jupyter
   jupyter:
     build: .
     container_name: jupyter_ml
-    # Forzamos a que este contenedor SOLO ejecute Jupyter
     command: ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''"]
     ports:
       - "8888:8888"
     depends_on:
-      db:
+      postgres_peliculas:
         condition: service_healthy
     volumes:
       - .:/app

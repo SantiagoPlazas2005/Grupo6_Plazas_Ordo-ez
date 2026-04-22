@@ -98,73 +98,87 @@ class OMDbExtractor:
         }
 
     def ejecutar_etl_masivo(self, busquedas_lista, paginas_por_tema=15):
-        """Orquestador para obtener miles de películas"""
+        """Orquestador para obtener miles de películas con salvaguarda de errores"""
         todos_los_ids = []
         
-        # 1. Fase de Recolección de IDs
-        for busqueda in busquedas_lista:
-            ids = self.buscar_por_termino(busqueda, paginas=paginas_por_tema)
-            todos_los_ids.extend(ids)
-            # Pequeño delay para no saturar la API
-            time.sleep(0.1)
-        
-        total_ids = list(set(todos_los_ids)) # Quitar duplicados
-        
-        if not total_ids:
-            logger.error("🚫 No se encontró ningún ID. Revisa tu conexión o API Key.")
-            return []
+        try:
+            # 1. Fase de Recolección de IDs
+            for busqueda in busquedas_lista:
+                ids = self.buscar_por_termino(busqueda, paginas=paginas_por_tema)
+                todos_los_ids.extend(ids)
+                time.sleep(0.1)
+            
+            total_ids = list(set(todos_los_ids)) # Quitar duplicados
+            
+            if not total_ids:
+                logger.error("🚫 No se encontró ningún ID.")
+                return []
 
-        logger.info(f"📊 Se encontraron {len(total_ids)} IDs únicos. Iniciando descarga de detalles...")
+            logger.info(f"📊 Se encontraron {len(total_ids)} IDs únicos. Iniciando descarga...")
 
-        # 2. Fase de Extracción de Detalles
-        resultados_finales = []
-        for i, mid in enumerate(total_ids):
-            if i % 20 == 0:
-                logger.info(f"⏳ Progreso: {i}/{len(total_ids)} películas procesadas...")
+            # 2. Fase de Extracción de Detalles
+            resultados_finales = []
+            for i, mid in enumerate(total_ids):
+                if i % 20 == 0:
+                    logger.info(f"⏳ Progreso: {i}/{len(total_ids)} películas procesadas...")
+                
+                # SI LA API DA ERROR AQUÍ, CAPTURAMOS Y RETORNAMOS LO QUE LLEVAMOS
+                try:
+                    detalle = self.extraer_detalle_pelicula(mid)
+                    limpio = self.procesar_datos(detalle)
+                    
+                    if limpio and limpio.get('calificacion_imdb') != 'N/A':
+                        resultados_finales.append(limpio)
+                except Exception as api_err:
+                    logger.warning(f"⚠️ Error en ID {mid}, deteniendo y salvando lo obtenido: {api_err}")
+                    break # Sale del bucle de películas pero sigue al return
+
+                # Límite de seguridad
+                if i >= 1950: 
+                    logger.warning("⚠️ Límite alcanzado. Deteniendo para salvar.")
+                    break
             
-            detalle = self.extraer_detalle_pelicula(mid)
-            limpio = self.procesar_datos(detalle)
-            
-            if limpio and limpio.get('calificacion_imdb') != 'N/A':
-                resultados_finales.append(limpio)
-            
-            # Respetar límites de la API (OMDb Free permite ~1000-2000 diarias)
-            if i >= 1900: 
-                logger.warning("⚠️ Alcanzando límite de seguridad diario. Deteniendo extracción.")
-                break
-        
-        return resultados_finales
+            return resultados_finales
+
+        except Exception as e:
+            logger.error(f"💥 Error inesperado en el proceso masivo: {e}")
+            return [] # En caso de error total
 
 if __name__ == "__main__":
-    # Lista masiva de términos para capturar miles de registros
     TEMAS_A_BUSCAR = [
-        'Marvel', 'Star Wars', 'Batman', 'Disney', 'Avengers', 'Horror', 'Action', 
-        'Love', 'World', 'Space', 'Dead', 'Man', 'Woman', 'Time', 'Life', 'Night',
-        'Dark', 'King', 'Police', 'War', 'Dragon', 'American', 'Secret', 'Ghost',
-        'Agent', 'Super', 'Final', 'Last', 'Game', 'Road', 'Mountain', 'River',
-        'Blue', 'Red', 'Kill', 'House', 'Moon', 'Sun', 'Fire', 'Water', 'City'
+        'the', 'a', 'in', 'of', 'for', 'with', 'on', 'at', 'by',
+        'happy', 'sad', 'angry', 'lost', 'found', 'broken', 'wild', 'dream',
+        'london', 'paris', 'tokyo', 'doctor', 'teacher', 'driver', 'space',
+        'one', 'two', 'seven', '2020', '2021', '2022', '2023', '2024'
     ]
     
+    datos_finales = []
+    extractor = None
+
     try:
         extractor = OMDbExtractor()
-        # Buscamos 15 páginas por cada tema (150 películas potenciales por tema)
-        datos_finales = extractor.ejecutar_etl_masivo(TEMAS_A_BUSCAR, paginas_por_tema=15)
+        logger.info("🚀 Iniciando extracción masiva...")
+        # Guardamos lo que devuelva la función
+        datos_finales = extractor.ejecutar_etl_masivo(TEMAS_A_BUSCAR, paginas_por_tema=50)
         
-        if datos_finales:
+    except Exception as e:
+        logger.error(f"💥 Error crítico en el sistema: {str(e)}")
+        
+    finally:
+        # LÓGICA DE SALVAMENTO:
+        # Si la función devolvió datos, o si ocurrio un error pero el objeto tiene datos guardados
+        if datos_finales and len(datos_finales) > 0:
             os.makedirs('data', exist_ok=True)
             df = pd.DataFrame(datos_finales)
             
-            # Guardar CSV principal
+            # Guardar CSV (Sobrescribe el de 519 con los nuevos datos)
             df.to_csv('data/peliculas.csv', index=False, encoding='utf-8')
             
-            # Guardar respaldo en JSON
+            # Guardar JSON de respaldo
             with open('data/peliculas_raw.json', 'w', encoding='utf-8') as f:
                 json.dump(datos_finales, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"🏆 ¡ÉXITO! Se procesaron {len(df)} películas nuevas.")
-            print(f"\nExtracción finalizada. Archivo guardado en data/peliculas.csv")
+            logger.info(f"💾 ¡ÉXITO! Se han salvado {len(df)} películas en 'data/peliculas.csv'.")
+            print(f"\n✅ Proceso finalizado. Total recuperado: {len(df)} filas.")
         else:
-            logger.error("No se pudieron obtener datos.")
-            
-    except Exception as e:
-        logger.error(f"Error crítico en el sistema: {str(e)}")
+            logger.error("❌ No se generaron datos nuevos. El archivo CSV no fue actualizado.")

@@ -11,9 +11,9 @@ db_url = os.getenv('DATABASE_URL')
 
 # --- CORRECCIÓN CRÍTICA PARA DOCKER ---
 # Si estamos dentro de Docker, el host DEBE ser 'db', no 'localhost'
-if not db_url or "localhost" in db_url:
-    # Cambiamos 'localhost' por 'db' que es el nombre del servicio en tu docker-compose
-    db_url = "postgresql://santiago:plazas2005@db:5432/base_datos_peliculas"
+if not db_url:
+    # Solo como respaldo si el .env falla
+    db_url = "postgresql://santiago:plazas2005@localhost:5432/base_datos_peliculas"
 # --------------------------------------
 
 try:

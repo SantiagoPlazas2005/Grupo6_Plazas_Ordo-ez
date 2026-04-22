@@ -40,4 +40,4 @@ logs/
 # Variables de entorno
 .env
 .env.local
-.env.*.local
+.env.*.localvenv/
