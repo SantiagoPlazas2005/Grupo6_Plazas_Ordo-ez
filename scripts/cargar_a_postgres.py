@@ -24,11 +24,13 @@ try:
     if os.path.exists('data/peliculas.csv'):
         print("📖 Leyendo datos del CSV...")
         df = pd.read_csv('data/peliculas.csv')
+
+        df = df.drop_duplicates(subset=['id_imdb'])
         
         # 4. Enviar a Postgres
         print(f"🚀 Subiendo {len(df)} películas a PostgreSQL nativo...")
         # Usamos if_exists='replace' para que la tabla se actualice con los miles de datos nuevos
-        df.to_sql('peliculas', engine, if_exists='replace', index=False)
+        df.to_sql('peliculas', engine, if_exists='append', index=False)
         
         print("✅ ¡ÉXITO! Los datos ya están en la base de datos nativa.")
     else:
